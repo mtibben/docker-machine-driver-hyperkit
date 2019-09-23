@@ -17,49 +17,74 @@ limitations under the License.
 package hyperkit
 
 import (
-	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/hooklift/iso9660"
 )
 
-// ExtractFile extracts a file from an ISO
-func ExtractFile(isoPath, srcPath, destPath string) error {
+var kernelRegexp = regexp.MustCompile(`(vmlinu[xz]|bzImage)[\d]*`)
+
+type ISOBootFiles struct {
+	InitrdPath string
+	KernelPath string
+	IsoLinuxCfgPath string
+}
+
+func ISOExtractBootFiles (isoPath, destDirPath string) (ISOBootFiles, error) {
+	bootFiles := ISOBootFiles{}
 	iso, err := os.Open(isoPath)
 	if err != nil {
-		return err
+		return bootFiles, err
 	}
 	defer iso.Close()
 
 	r, err := iso9660.NewReader(iso)
 	if err != nil {
-		return err
+		return bootFiles, err
 	}
 
-	f, err := findFile(r, srcPath)
-	if err != nil {
-		return err
-	}
+	for {
+		f, err := r.Next()
+		if err == io.EOF {
+			break
+		}
 
-	dst, err := os.Create(destPath)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
+		if f.IsDir() {
+			continue
+		}
 
-	_, err = io.Copy(dst, f.Sys().(io.Reader))
-	return err
-}
-
-func findFile(r *iso9660.Reader, path string) (os.FileInfo, error) {
-	// Look through the ISO for a file with a matching path.
-	for f, err := r.Next(); err != io.EOF; f, err = r.Next() {
 		// For some reason file paths in the ISO sometimes contain a '.' character at the end, so strip that off.
-		if strings.TrimSuffix(f.Name(), ".") == path {
-			return f, nil
+		destPath := filepath.Join(destDirPath, filepath.Base(strings.TrimSuffix(f.Name(), ".")))
+
+		if kernelRegexp.MatchString(f.Name()) {
+			bootFiles.KernelPath = destPath
+		} else if strings.Contains(f.Name(), "initrd") {
+			bootFiles.InitrdPath = destPath
+		} else if strings.Contains(f.Name(), "isolinux.cfg") {
+			bootFiles.IsoLinuxCfgPath = destPath
+		} else {
+			continue
+		}
+
+		err = func () error {
+			dst, err := os.Create(destPath)
+			if err != nil {
+				return err
+			}
+			defer dst.Close()
+
+			_, err = io.Copy(dst, f.Sys().(io.Reader))
+			return err
+		} ();
+
+		if err != nil {
+			return bootFiles, err
 		}
 	}
-	return nil, fmt.Errorf("unable to find file %s", path)
+
+	return bootFiles, err
 }
