@@ -52,7 +52,9 @@ const (
 		"sudo chown root:wheel %s && sudo chmod u+s %s"
 
 	defaultCPUs     = 1
+	defaultDiskSize = 20000
 	defaultMemory   = 1024
+	defaultSSHUser  = "docker"
 )
 
 // Driver is the machine driver for Hyperkit
@@ -76,11 +78,9 @@ type Driver struct {
 // NewDriver creates a new driver for a host
 func NewDriver(machineName, storePath string) *Driver {
 	return &Driver{
-		BaseDriver: &drivers.BaseDriver{
-			MachineName: machineName,
-			SSHUser: "docker",
-		},
+		// Don't init BaseDriver values here. They are overwritten by API .SetConfigRaw() call.
 		CommonDriver: &pkgdrivers.CommonDriver{},
+		DiskSize: defaultDiskSize,
 	}
 }
 
@@ -108,6 +108,8 @@ func (d *Driver) Create() error {
 	if err := d.verifyRootPermissions(); err != nil {
 		return err
 	}
+
+	d.SSHUser = defaultSSHUser
 
 	// TODO: handle different disk types.
 	if err := pkgdrivers.MakeDiskImage(d.BaseDriver, d.Boot2DockerURL, d.DiskSize); err != nil {
