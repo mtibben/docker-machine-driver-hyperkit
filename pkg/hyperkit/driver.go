@@ -35,6 +35,7 @@ import (
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/state"
+	"github.com/google/uuid"
 	"github.com/johanneswuerbach/nfsexports"
 	pkgdrivers "github.com/machine-drivers/docker-machine-driver-hyperkit/pkg/drivers"
 	ps "github.com/mitchellh/go-ps"
@@ -73,9 +74,10 @@ type Driver struct {
 }
 
 // NewDriver creates a new driver for a host
-func NewDriver(hostName, storePath string) *Driver {
+func NewDriver(machineName, storePath string) *Driver {
 	return &Driver{
 		BaseDriver: &drivers.BaseDriver{
+			MachineName: machineName,
 			SSHUser: "docker",
 		},
 		CommonDriver: &pkgdrivers.CommonDriver{},
@@ -231,6 +233,9 @@ func (d *Driver) Start() error {
 		h.Memory = d.Memory
 	}
 	h.UUID = d.UUID
+	if h.UUID == "" {
+		h.UUID = uuid.NewSHA1( uuid.Nil, []byte(d.GetMachineName())).String()
+	}
 	// This should stream logs from hyperkit, but doesn't seem to work.
 	logger := golog.New(os.Stderr, "hyperkit", golog.LstdFlags)
 	h.SetLogger(logger)
