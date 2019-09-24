@@ -21,6 +21,7 @@ package hyperkit
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/docker/machine/libmachine/mcnflag"
 	"io/ioutil"
 	golog "log"
 	"os"
@@ -82,6 +83,47 @@ func NewDriver(machineName, storePath string) *Driver {
 		CommonDriver: &pkgdrivers.CommonDriver{},
 		DiskSize: defaultDiskSize,
 	}
+}
+
+// GetCreateFlags registers the flags this driver adds to
+// "docker hosts create"
+func (d *Driver) GetCreateFlags() []mcnflag.Flag {
+	return []mcnflag.Flag{
+		mcnflag.StringFlag{
+			EnvVar: "HYPERKIT_BOOT2DOCKER_URL",
+			Name:   "hyperkit-boot2docker-url",
+			Usage:  "The URL of the boot2docker image. Defaults to the latest available version",
+			Value:  "",
+		},
+		mcnflag.IntFlag{
+			EnvVar: "HYPERKIT_CPU_COUNT",
+			Name:   "hyperkit-cpu-count",
+			Usage:  "Number of CPUs for the host.",
+			Value:  defaultCPUs,
+		},
+		mcnflag.IntFlag{
+			EnvVar: "HYPERKIT_DISK_SIZE",
+			Name:   "hyperkit-disk-size",
+			Usage:  "Size of disk for host in MB.",
+			Value:  defaultDiskSize,
+		},
+		mcnflag.IntFlag{
+			EnvVar: "HYPERKIT_MEMORY_SIZE",
+			Name:   "hyperkit-memory-size",
+			Usage:  "Memory size for host in MB.",
+			Value:  defaultMemory,
+		},
+	}
+}
+
+// SetConfigFromFlags sets the machine config
+func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
+	d.Boot2DockerURL = flags.String("hyperkit-boot2docker-url")
+	d.CPU = flags.Int("hyperkit-cpu-count")
+	d.DiskSize = int(flags.Int("hyperkit-disk-size"))
+	d.Memory = flags.Int("hyperkit-memory-size")
+
+	return nil
 }
 
 // PreCreateCheck is called to enforce pre-creation steps
