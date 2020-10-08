@@ -21,10 +21,14 @@ package hyperkit
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/docker/machine/libmachine/mcnflag"
+	"io/ioutil"
+	golog "log"
 	"os"
 	"os/user"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -32,32 +36,34 @@ import (
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/state"
-	nfsexports "github.com/johanneswuerbach/nfsexports"
+	"github.com/google/uuid"
+	"github.com/johanneswuerbach/nfsexports"
+	pkgdrivers "github.com/machine-drivers/docker-machine-driver-hyperkit/pkg/drivers"
+	ps "github.com/mitchellh/go-ps"
 	hyperkit "github.com/moby/hyperkit/go"
 	"github.com/pkg/errors"
-	pkgdrivers "github.com/machine-drivers/docker-machine-driver-hyperkit/pkg/drivers"
-	"regexp"
-	"github.com/docker/machine/libmachine/mcnutils"
 )
 
 const (
 	isoFilename     = "boot2docker.iso"
-	isoMountPath    = "b2d-image"
 	pidFileName     = "hyperkit.pid"
 	machineFileName = "hyperkit.json"
 	permErr         = "%s needs to run with elevated permissions. " +
 		"Please run the following command, then try again: " +
 		"sudo chown root:wheel %s && sudo chmod u+s %s"
+
+	defaultCPUs     = 1
+	defaultDiskSize = 20000
+	defaultMemory   = 1024
+	defaultSSHUser  = "docker"
 )
 
-var (
-	kernelRegexp       = regexp.MustCompile(`(vmlinu[xz]|bzImage)[\d]*`)
-	kernelOptionRegexp = regexp.MustCompile(`(?:\t|\s{2})append\s+([[:print:]]+)`)
-)
-
+// Driver is the machine driver for Hyperkit
 type Driver struct {
 	*drivers.BaseDriver
 	*pkgdrivers.CommonDriver
+	BootInitrd 	   string
+	BootKernel 	   string
 	Boot2DockerURL string
 	DiskSize       int
 	CPU            int
@@ -66,36 +72,87 @@ type Driver struct {
 	NFSShares      []string
 	NFSSharesRoot  string
 	UUID           string
-	BootKernel string
-	BootInitrd string
-	Initrd     string
-	Vmlinuz    string
+	VpnKitSock     string
+	VSockPorts     []string
 }
 
-func NewDriver(hostName, storePath string) *Driver {
+// NewDriver creates a new driver for a host
+func NewDriver(machineName, storePath string) *Driver {
 	return &Driver{
-		BaseDriver: &drivers.BaseDriver{
-			SSHUser: "docker",
-		},
+		// Don't init BaseDriver values here. They are overwritten by API .SetConfigRaw() call.
 		CommonDriver: &pkgdrivers.CommonDriver{},
+		DiskSize: defaultDiskSize,
 	}
 }
 
-// PreCreateCheck is called to enforce pre-creation steps
-func (d *Driver) PreCreateCheck() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
+// GetCreateFlags registers the flags this driver adds to
+// "docker hosts create"
+func (d *Driver) GetCreateFlags() []mcnflag.Flag {
+	return []mcnflag.Flag{
+		mcnflag.StringFlag{
+			EnvVar: "HYPERKIT_BOOT2DOCKER_URL",
+			Name:   "hyperkit-boot2docker-url",
+			Usage:  "The URL of the boot2docker image. Defaults to the latest available version",
+			Value:  "",
+		},
+		mcnflag.IntFlag{
+			EnvVar: "HYPERKIT_CPU_COUNT",
+			Name:   "hyperkit-cpu-count",
+			Usage:  "Number of CPUs for the host.",
+			Value:  defaultCPUs,
+		},
+		mcnflag.IntFlag{
+			EnvVar: "HYPERKIT_DISK_SIZE",
+			Name:   "hyperkit-disk-size",
+			Usage:  "Size of disk for host in MB.",
+			Value:  defaultDiskSize,
+		},
+		mcnflag.IntFlag{
+			EnvVar: "HYPERKIT_MEMORY_SIZE",
+			Name:   "hyperkit-memory-size",
+			Usage:  "Memory size for host in MB.",
+			Value:  defaultMemory,
+		},
 	}
+}
 
-	if syscall.Geteuid() != 0 {
-		return fmt.Errorf(permErr, filepath.Base(exe), exe, exe)
-	}
+// SetConfigFromFlags sets the machine config
+func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
+	d.Boot2DockerURL = flags.String("hyperkit-boot2docker-url")
+	d.CPU = flags.Int("hyperkit-cpu-count")
+	d.DiskSize = int(flags.Int("hyperkit-disk-size"))
+	d.Memory = flags.Int("hyperkit-memory-size")
 
 	return nil
 }
 
+// PreCreateCheck is called to enforce pre-creation steps
+func (d *Driver) PreCreateCheck() error {
+	return d.verifyRootPermissions()
+}
+
+// verifyRootPermissions is called before any step which needs root access
+func (d *Driver) verifyRootPermissions() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	euid := syscall.Geteuid()
+	log.Debugf("exe=%s uid=%d", exe, euid)
+	if euid != 0 {
+		return fmt.Errorf(permErr, filepath.Base(exe), exe, exe)
+	}
+	return nil
+}
+
+// Create a host using the driver's config
 func (d *Driver) Create() error {
+	if err := d.verifyRootPermissions(); err != nil {
+		return err
+	}
+
+	d.SSHUser = defaultSSHUser
+
 	// TODO: handle different disk types.
 	if err := pkgdrivers.MakeDiskImage(d.BaseDriver, d.Boot2DockerURL, d.DiskSize); err != nil {
 		return errors.Wrap(err, "making disk image")
@@ -103,7 +160,7 @@ func (d *Driver) Create() error {
 
 	isoPath := d.ResolveStorePath(isoFilename)
 	if err := d.extractKernel(isoPath); err != nil {
-		return err
+		return errors.Wrap(err, "extracting kernel")
 	}
 
 	return d.Start()
@@ -129,37 +186,55 @@ func (d *Driver) GetURL() (string, error) {
 	return fmt.Sprintf("tcp://%s:2376", ip), nil
 }
 
-// GetState returns the state that the host is in (running, stopped, etc)
-func (d *Driver) GetState() (state.State, error) {
-	pid := d.getPid()
+// Return the state of the hyperkit pid
+func pidState(pid int) (state.State, error) {
 	if pid == 0 {
 		return state.Stopped, nil
 	}
-	p, err := os.FindProcess(pid)
+	p, err := ps.FindProcess(pid)
 	if err != nil {
 		return state.Error, err
 	}
-
-	// Sending a signal of 0 can be used to check the existence of a process.
-	if err := p.Signal(syscall.Signal(0)); err != nil {
+	if p == nil {
+		log.Debugf("hyperkit pid %d missing from process table", pid)
 		return state.Stopped, nil
 	}
-	if p == nil {
+	// hyperkit or com.docker.hyper
+	if !strings.Contains(p.Executable(), "hyper") {
+		log.Debugf("pid %d is stale, and is being used by %s", pid, p.Executable())
 		return state.Stopped, nil
 	}
 	return state.Running, nil
 }
 
+// GetState returns the state that the host is in (running, stopped, etc)
+func (d *Driver) GetState() (state.State, error) {
+	if err := d.verifyRootPermissions(); err != nil {
+		return state.Error, err
+	}
+
+	pid := d.getPid()
+	log.Debugf("hyperkit pid from json: %d", pid)
+	return pidState(pid)
+}
+
 // Kill stops a host forcefully
 func (d *Driver) Kill() error {
+	if err := d.verifyRootPermissions(); err != nil {
+		return err
+	}
 	return d.sendSignal(syscall.SIGKILL)
 }
 
 // Remove a host
 func (d *Driver) Remove() error {
+	if err := d.verifyRootPermissions(); err != nil {
+		return err
+	}
+
 	s, err := d.GetState()
 	if err != nil || s == state.Error {
-		log.Infof("Error checking machine status: %s, assuming it has been removed already", err)
+		log.Debugf("Error checking machine status: %v, assuming it has been removed already", err)
 	}
 	if s == state.Running {
 		if err := d.Stop(); err != nil {
@@ -169,36 +244,62 @@ func (d *Driver) Remove() error {
 	return nil
 }
 
+// Restart a host
 func (d *Driver) Restart() error {
 	return pkgdrivers.Restart(d)
 }
 
 // Start a host
 func (d *Driver) Start() error {
-	h, err := hyperkit.New("", "", filepath.Join(d.StorePath, "machines", d.MachineName))
-	if err != nil {
+	if err := d.verifyRootPermissions(); err != nil {
 		return err
 	}
 
+	stateDir := filepath.Join(d.StorePath, "machines", d.MachineName)
+	if err := d.recoverFromUncleanShutdown(); err != nil {
+		return err
+	}
+	h, err := hyperkit.New("", d.VpnKitSock, stateDir)
+	if err != nil {
+		return errors.Wrap(err, "new-ing Hyperkit")
+	}
+
 	// TODO: handle the rest of our settings.
-	h.Kernel = d.ResolveStorePath(d.Vmlinuz)
-	h.Initrd =d.ResolveStorePath(d.Initrd)
+	h.Kernel = d.BootKernel
+	h.Initrd = d.BootInitrd
 	h.VMNet = true
 	h.ISOImages = []string{d.ResolveStorePath(isoFilename)}
 	h.Console = hyperkit.ConsoleFile
-	h.CPUs = d.CPU
-	h.Memory = d.Memory
+	if d.CPU > defaultCPUs {
+		h.CPUs = d.CPU
+	}
+	if d.Memory > defaultMemory {
+		h.Memory = d.Memory
+	}
 	h.UUID = d.UUID
+	if h.UUID == "" {
+		h.UUID = uuid.NewSHA1( uuid.Nil, []byte(d.GetMachineName())).String()
+	}
+	// This should stream logs from hyperkit, but doesn't seem to work.
+	logger := golog.New(os.Stderr, "hyperkit", golog.LstdFlags)
+	h.SetLogger(logger)
 
-	log.Infof("Using UUID %s", h.UUID)
+	if vsockPorts, err := d.extractVSockPorts(); err != nil {
+		return err
+	} else if len(vsockPorts) >= 1 {
+		h.VSock = true
+		h.VSockPorts = vsockPorts
+	}
+
+	log.Debugf("Using UUID %s", h.UUID)
 	mac, err := GetMACAddressFromUUID(h.UUID)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "getting MAC address from UUID")
 	}
 
 	// Need to strip 0's
 	mac = trimMacAddress(mac)
-	log.Infof("Generated MAC %s", mac)
+	log.Debugf("Generated MAC %s", mac)
 	h.Disks = []hyperkit.DiskConfig{
 		{
 			Path:   pkgdrivers.GetDiskPath(d.BaseDriver),
@@ -206,100 +307,184 @@ func (d *Driver) Start() error {
 			Driver: "virtio-blk",
 		},
 	}
-	log.Infof("Starting with cmdline: %s", d.Cmdline)
+	log.Debugf("Starting with cmdline: %s", d.Cmdline)
 	if err := h.Start(d.Cmdline); err != nil {
-		return err
+		return errors.Wrapf(err, "starting with cmd line: %s", d.Cmdline)
 	}
 
 	getIP := func() error {
-		var err error
+		st, err := d.GetState()
+		if err != nil {
+			return errors.Wrap(err, "get state")
+		}
+		if st == state.Error || st == state.Stopped {
+			return fmt.Errorf("hyperkit crashed! command line:\n  hyperkit %s", d.Cmdline)
+		}
+
 		d.IPAddress, err = GetIPAddressByMACAddress(mac)
 		if err != nil {
-			return &RetriableError{Err: err}
+			return &tempError{err}
 		}
 		return nil
 	}
 
-	if err := RetryAfter(30, getIP, 2*time.Second); err != nil {
+	for i := 0; i < 30; i++ {
+		log.Debugf("Attempt %d", i)
+		err = getIP()
+		if err == nil {
+			break
+		}
+		if _, ok := err.(*tempError); !ok {
+			return err
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	if err != nil {
 		return fmt.Errorf("IP address never found in dhcp leases file %v", err)
 	}
+	log.Debugf("IP: %s", d.IPAddress)
 
 	if len(d.NFSShares) > 0 {
 		log.Info("Setting up NFS mounts")
-
 		// takes some time here for ssh / nfsd to work properly
-		err = d.waitForIP()
-		if err != nil {
-			log.Errorf("Failed to get IP address for VM: %s", err.Error())
-			return err
-		}
-
+		time.Sleep(time.Second * 30)
 		err = d.setupNFSShare()
 		if err != nil {
-			log.Errorf("NFS setup failed: %s", err.Error())
+			// TODO(tstromberg): Check that logging an and error and return it is appropriate. Seems weird.
+			log.Errorf("NFS setup failed: %v", err)
 			return err
 		}
 	}
 
+	return nil
+}
+
+type tempError struct {
+	Err error
+}
+
+func (t tempError) Error() string {
+	return "Temporary error: " + t.Err.Error()
+}
+
+//recoverFromUncleanShutdown searches for an existing hyperkit.pid file in
+//the machine directory. If it can't find it, a clean shutdown is assumed.
+//If it finds the pid file, it checks for a running hyperkit process with that pid
+//as the existence of a file might not indicate an unclean shutdown but an actual running
+//hyperkit server. If the PID in the pidfile does not belong to a running hyperkit
+//process, we can safely delete it, and there is a good chance the machine will recover when restarted.
+func (d *Driver) recoverFromUncleanShutdown() error {
+	stateDir := filepath.Join(d.StorePath, "machines", d.MachineName)
+	pidFile := filepath.Join(stateDir, pidFileName)
+
+	if _, err := os.Stat(pidFile); err != nil {
+		if os.IsNotExist(err) {
+			log.Debugf("clean start, hyperkit pid file doesn't exist: %s", pidFile)
+			return nil
+		}
+		return errors.Wrap(err, "stat")
+	}
+
+	log.Warnf("hyperkit pid file still exists: %s", pidFile)
+	bs, err := ioutil.ReadFile(pidFile)
+	if err != nil {
+		return errors.Wrapf(err, "reading pidfile %s", pidFile)
+	}
+	content := strings.TrimSpace(string(bs))
+	pid, err := strconv.Atoi(content)
+	if err != nil {
+		return errors.Wrapf(err, "parsing pidfile %s", pidFile)
+	}
+
+	st, err := pidState(pid)
+	if err != nil {
+		return errors.Wrap(err, "pidState")
+	}
+
+	log.Debugf("pid %d is in state %q", pid, st)
+	if st == state.Running {
+		return nil
+	}
+	log.Debugf("Removing stale pid file %s...", pidFile)
+	if err := os.Remove(pidFile); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("removing pidFile %s", pidFile))
+	}
 	return nil
 }
 
 // Stop a host gracefully
 func (d *Driver) Stop() error {
+	if err := d.verifyRootPermissions(); err != nil {
+		return err
+	}
 	d.cleanupNfsExports()
-	return d.sendSignal(syscall.SIGTERM)
+	err := d.sendSignal(syscall.SIGTERM)
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("hyperkit sigterm failed"))
+	}
+
+	// wait 5s for graceful shutdown
+	for i := 0; i < 5; i++ {
+		log.Debug("waiting for graceful shutdown")
+		time.Sleep(time.Second * 1)
+		s, err := d.GetState()
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("hyperkit waiting graceful shutdown failed"))
+		}
+		if s == state.Stopped {
+			return nil
+		}
+	}
+
+	log.Debug("sending sigkill")
+	return d.Kill()
 }
 
 func (d *Driver) extractKernel(isoPath string) error {
-	log.Debugf("Mounting %s", isoFilename)
-
-	volumeRootDir := d.ResolveStorePath(isoMountPath)
-	err := hdiutil("attach", d.ResolveStorePath(isoFilename), "-mountpoint", volumeRootDir)
+	files, err := ISOExtractBootFiles(isoPath, d.ResolveStorePath(""))
 	if err != nil {
 		return err
 	}
-	defer func() error {
-		log.Debugf("Unmounting %s", isoFilename)
-		return hdiutil("detach", volumeRootDir)
-	}()
 
-	log.Debugf("Extracting Kernel Options...")
-	if err := d.extractKernelOptions(); err != nil {
-		return err
+	if files.KernelPath == ""  {
+		return errors.Wrapf(err, "failed to extract kernel boot image from iso")
 	}
+	d.BootKernel = files.KernelPath
 
-	if d.BootKernel == "" && d.BootInitrd == "" {
-		filepath.Walk(volumeRootDir, func(path string, f os.FileInfo, err error) error {
-			if kernelRegexp.MatchString(path) {
-				d.BootKernel = path
-				_, d.Vmlinuz = filepath.Split(path)
-			}
-			if strings.Contains(path, "initrd") {
-				d.BootInitrd = path
-				_, d.Initrd = filepath.Split(path)
-			}
-			return nil
-		})
+	if files.InitrdPath == "" {
+		return errors.Wrapf(err, "failed to extract initial ram disk from iso")
 	}
-	
-	if  d.BootKernel == "" || d.BootInitrd == "" {
-		err := fmt.Errorf("==== Can't extract Kernel and Ramdisk file ====")
-		return err
-		}
+	d.BootInitrd = files.InitrdPath
 
-	dest := d.ResolveStorePath(d.Vmlinuz)
-	log.Debugf("Extracting %s into %s", d.BootKernel, dest)
-	if err := mcnutils.CopyFile(d.BootKernel, dest); err != nil {
-		return err
-	}
-
-	dest = d.ResolveStorePath(d.Initrd)
-	log.Debugf("Extracting %s into %s", d.BootInitrd, dest)
-	if err := mcnutils.CopyFile(d.BootInitrd, dest); err != nil {
-		return err
+	if files.IsoLinuxCfgPath == "" {
+		return errors.Wrapf(err, "failed to extract isolinux config")
 	}
 
 	return nil
+}
+
+// InvalidPortNumberError implements the Error interface.
+// It is used when a VSockPorts port number cannot be recognised as an integer.
+type InvalidPortNumberError string
+
+// Error returns an Error for InvalidPortNumberError
+func (port InvalidPortNumberError) Error() string {
+	return fmt.Sprintf("vsock port '%s' is not an integer", string(port))
+}
+
+func (d *Driver) extractVSockPorts() ([]int, error) {
+	vsockPorts := make([]int, 0, len(d.VSockPorts))
+
+	for _, port := range d.VSockPorts {
+		p, err := strconv.Atoi(port)
+		if err != nil {
+			return nil, InvalidPortNumberError(port)
+		}
+		vsockPorts = append(vsockPorts, p)
+	}
+
+	return vsockPorts, nil
 }
 
 func (d *Driver) setupNFSShare() error {
@@ -367,13 +552,13 @@ func (d *Driver) getPid() int {
 
 	f, err := os.Open(pidPath)
 	if err != nil {
-		log.Warnf("Error reading pid file: %s", err)
+		log.Warnf("Error reading pid file: %v", err)
 		return 0
 	}
 	dec := json.NewDecoder(f)
 	config := hyperkit.HyperKit{}
 	if err := dec.Decode(&config); err != nil {
-		log.Warnf("Error decoding pid file: %s", err)
+		log.Warnf("Error decoding pid file: %v", err)
 		return 0
 	}
 
@@ -385,75 +570,12 @@ func (d *Driver) cleanupNfsExports() {
 		log.Infof("You must be root to remove NFS shared folders. Please type root password.")
 		for _, share := range d.NFSShares {
 			if _, err := nfsexports.Remove("", d.nfsExportIdentifier(share)); err != nil {
-				log.Errorf("failed removing nfs share (%s): %s", share, err.Error())
+				log.Errorf("failed removing nfs share (%s): %v", share, err)
 			}
 		}
 
 		if err := nfsexports.ReloadDaemon(); err != nil {
-			log.Errorf("failed to reload the nfs daemon: %s", err.Error())
+			log.Errorf("failed to reload the nfs daemon: %v", err)
 		}
 	}
-}
-
-func (d *Driver) extractKernelOptions() error {
-	volumeRootDir := d.ResolveStorePath(isoMountPath)
-	if d.Cmdline == "" {
-		err := filepath.Walk(volumeRootDir, func(path string, f os.FileInfo, err error) error {
-			if strings.Contains(path, "isolinux.cfg") {
-				d.Cmdline, err = readLine(path)
-				if err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-
-		if d.Cmdline == "" {
-			return errors.New("Not able to parse isolinux.cfg")
-		}
-	}
-
-	log.Debugf("Extracted Options %q", d.Cmdline)
-	return nil
-}
-
-func (d *Driver) waitForIP() error {
-	var ip string
-	var err error
-	mac, err := GetMACAddressFromUUID(d.UUID)
-	if err != nil {
-		return err
-	}
-
-	log.Infof("Waiting for VM to come online...")
-	for i := 1; i <= 60; i++ {
-
-		ip, err = GetIPAddressByMACAddress(mac)
-		if err != nil {
-			log.Debugf("Not there yet %d/%d, error: %s", i, 60, err)
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		if ip != "" {
-			log.Debugf("Got an ip: %s", ip)
-			d.IPAddress = ip
-
-			break
-		}
-	}
-
-	if ip == "" {
-		return fmt.Errorf("Machine didn't return an IP after 120 seconds, aborting")
-	}
-
-	// Wait for SSH over NAT to be available before returning to user
-	if err := drivers.WaitForSSH(d); err != nil {
-		return err
-	}
-
-	return nil
 }
