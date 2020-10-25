@@ -1,3 +1,22 @@
+# zazula/docker-machine-driver-hyperkit
+
+Mods to default hyperkit machine driver to allow it to run on MacOS
+
+Primarily: https://github.com/machine-drivers/docker-machine-driver-hyperkit/pull/14
+
+```
+brew install golang dep
+go get github.com/zazula/docker-machine-driver-hyperkit
+cd ~/go/src/github.com/zazula/docker-machine-driver-hyperkit
+make build
+
+docker-machine -D create --driver hyperkit --engine-env DOCKER_RAMDISK=true --hyperkit-cpu-count 12 --hyperkit-disk-size 40960 --hyperkit-memory-size 16192  local
+[...]
+
+$eval $(docker-machine env local)```
+
+Make sure that ```hyperkit``` binary is setuid ```root``` as well.
+
 # docker-machine-driver-hyperkit
 
 The Hyperkit driver will eventually replace the existing xhyve driver and uses [moby/hyperkit](http://github.com/moby/hyperkit) as a Go library.
