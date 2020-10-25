@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/zazula/docker-machine-driver-hyperkit/pkg/hyperkit"
 	"github.com/docker/machine/libmachine/drivers/plugin"
-	"github.com/machine-drivers/docker-machine-driver-hyperkit/pkg/hyperkit"
 )
 
 func main() {
