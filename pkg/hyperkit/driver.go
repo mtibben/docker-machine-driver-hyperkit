@@ -26,6 +26,7 @@ import (
 	golog "log"
 	"os"
 	"os/user"
+//        "os/exec"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -56,6 +57,8 @@ const (
 	defaultDiskSize = 20000
 	defaultMemory   = 1024
 	defaultSSHUser  = "docker"
+	defaultNFSFlags = "noacl,async"
+	defaultNFSRoot  = "/mnt"
 )
 
 // Driver is the machine driver for Hyperkit
@@ -71,6 +74,7 @@ type Driver struct {
 	Cmdline        string
 	NFSShares      []string
 	NFSSharesRoot  string
+	NFSFlags       string
 	UUID           string
 	VpnKitSock     string
 	VSockPorts     []string
@@ -113,6 +117,24 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "Memory size for host in MB.",
 			Value:  defaultMemory,
 		},
+                mcnflag.StringSliceFlag{
+                        EnvVar: "HYPERKIT_NFS_SHARES",
+                        Name:   "hyperkit-nfs-shares",
+                        Usage:  "NFS directories to share in format src:dst where 'src' is relative to the machine/machines/<name> folder and 'dst' is relative to the directory set in hyperkit-nfs-root.",
+                        Value:  nil,
+                },
+                mcnflag.StringFlag{
+                        EnvVar: "HYPERKIT_NFS_ROOT",
+                        Name:   "hyperkit-nfs-root",
+                        Usage:  "VM Host root directory to locate NFS Shares",
+                        Value:  defaultNFSRoot,
+                },
+                mcnflag.StringFlag{
+                        EnvVar: "HYPERKIT_NFS_FLAGS",
+                        Name:   "hyperkit-nfs-flags",
+                        Usage:  "additional flags for NFS",
+                        Value:  defaultNFSFlags,
+                },
 	}
 }
 
@@ -122,6 +144,9 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.CPU = flags.Int("hyperkit-cpu-count")
 	d.DiskSize = int(flags.Int("hyperkit-disk-size"))
 	d.Memory = flags.Int("hyperkit-memory-size")
+        d.NFSFlags = flags.String("hyperkit-nfs-flags") 
+        d.NFSShares = flags.StringSlice("hyperkit-nfs-shares")
+        d.NFSSharesRoot = flags.String("hyperkit-nfs-root")
 
 	return nil
 }
@@ -346,7 +371,7 @@ func (d *Driver) Start() error {
 	log.Debugf("IP: %s", d.IPAddress)
 
 	if len(d.NFSShares) > 0 {
-		log.Info("Setting up NFS mounts")
+		log.Info("Setting up NFS mounts with NFS flags: ", d.NFSFlags)
 		// takes some time here for ssh / nfsd to work properly
 		time.Sleep(time.Second * 30)
 		err = d.setupNFSShare()
@@ -502,8 +527,21 @@ func (d *Driver) setupNFSShare() error {
 	log.Info(d.IPAddress)
 
 	for _, share := range d.NFSShares {
+		a := strings.Split(share, ":")
+                share = a[0]
+                _share := share
+                _mnt_sub_path := _share
+                if (len(a) > 1) {
+                        _mnt_sub_path = a[1]
+                }
 		if !path.IsAbs(share) {
 			share = d.ResolveStorePath(share)
+            		// rz: create path if it doesn't exist in the store...
+            		_ = os.MkdirAll(share, os.ModeDir | 0777)
+			// rz: we are suid root but NFS users will be mapped to the current user, so...
+			uid, _ := strconv.Atoi(user.Uid)
+			gid, _ := strconv.Atoi(user.Gid)
+			_ = os.Chown(share, uid, gid)
 		}
 		nfsConfig := fmt.Sprintf("%s %s -alldirs -mapall=%s", share, d.IPAddress, user.Username)
 
@@ -516,8 +554,8 @@ func (d *Driver) setupNFSShare() error {
 		}
 
 		root := d.NFSSharesRoot
-		mountCommands += fmt.Sprintf("sudo mkdir -p %s/%s\\n", root, share)
-		mountCommands += fmt.Sprintf("sudo mount -t nfs -o noacl,async,vers=3,nolock %s:%s %s/%s\\n", hostIP, share, root, share)
+		mountCommands += fmt.Sprintf("sudo mkdir -p %s/%s\\n", root, _mnt_sub_path)
+		mountCommands += fmt.Sprintf("sudo mount -t nfs -o %s %s:%s %s/%s\\n", d.NFSFlags, hostIP, share, root, _mnt_sub_path)
 	}
 
 	if err := nfsexports.ReloadDaemon(); err != nil {
@@ -567,7 +605,7 @@ func (d *Driver) getPid() int {
 
 func (d *Driver) cleanupNfsExports() {
 	if len(d.NFSShares) > 0 {
-		log.Infof("You must be root to remove NFS shared folders. Please type root password.")
+		//log.Infof("You must be root to remove NFS shared folders. Please type root password.")
 		for _, share := range d.NFSShares {
 			if _, err := nfsexports.Remove("", d.nfsExportIdentifier(share)); err != nil {
 				log.Errorf("failed removing nfs share (%s): %v", share, err)
