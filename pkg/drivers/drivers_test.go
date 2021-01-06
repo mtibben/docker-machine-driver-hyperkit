@@ -21,12 +21,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"k8s.io/minikube/pkg/minikube/tests"
 )
 
 func Test_createDiskImage(t *testing.T) {
-	tmpdir := tests.MakeTempDir()
+	tmpdir, err := ioutil.TempDir("", "docker-machine-driver-hyperkit-tests")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(tmpdir)
 
 	sshPath := filepath.Join(tmpdir, "ssh")

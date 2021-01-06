@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	golog "log"
 	"os"
 	"os/user"
 	"path"
@@ -38,10 +37,10 @@ import (
 	"github.com/docker/machine/libmachine/state"
 	"github.com/google/uuid"
 	"github.com/johanneswuerbach/nfsexports"
-	pkgdrivers "github.com/machine-drivers/docker-machine-driver-hyperkit/pkg/drivers"
 	ps "github.com/mitchellh/go-ps"
 	hyperkit "github.com/moby/hyperkit/go"
 	"github.com/pkg/errors"
+	pkgdrivers "github.com/zazula/docker-machine-driver-hyperkit/pkg/drivers"
 )
 
 const (
@@ -304,9 +303,6 @@ func (d *Driver) Start() error {
 	if h.UUID == "" {
 		h.UUID = uuid.NewSHA1(uuid.Nil, []byte(d.GetMachineName())).String()
 	}
-	// This should stream logs from hyperkit, but doesn't seem to work.
-	logger := golog.New(os.Stderr, "hyperkit", golog.LstdFlags)
-	h.SetLogger(logger)
 
 	if vsockPorts, err := d.extractVSockPorts(); err != nil {
 		return err
@@ -324,15 +320,15 @@ func (d *Driver) Start() error {
 	// Need to strip 0's
 	mac = trimMacAddress(mac)
 	log.Debugf("Generated MAC %s", mac)
-	h.Disks = []hyperkit.DiskConfig{
-		{
-			Path:   pkgdrivers.GetDiskPath(d.BaseDriver),
-			Size:   d.DiskSize,
-			Driver: "virtio-blk",
-		},
+
+	disk, err := hyperkit.NewDisk(pkgdrivers.GetDiskPath(d.BaseDriver), d.DiskSize)
+	if err != nil {
+		return errors.Wrap(err, "error creating disk")
 	}
+	h.Disks = []hyperkit.Disk{disk}
+
 	log.Debugf("Starting with cmdline: %s", d.Cmdline)
-	if err := h.Start(d.Cmdline); err != nil {
+	if _, err := h.Start(d.Cmdline); err != nil {
 		return errors.Wrapf(err, "starting with cmd line: %s", d.Cmdline)
 	}
 
@@ -592,8 +588,11 @@ func (d *Driver) getPid() int {
 		log.Warnf("Error reading pid file: %v", err)
 		return 0
 	}
+
 	dec := json.NewDecoder(f)
-	config := hyperkit.HyperKit{}
+	config := struct {
+		Pid int `json:pid`
+	}{}
 	if err := dec.Decode(&config); err != nil {
 		log.Warnf("Error decoding pid file: %v", err)
 		return 0

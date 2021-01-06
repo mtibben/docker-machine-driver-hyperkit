@@ -48,7 +48,10 @@ var validLeases = []byte(`{
 }`)
 
 func Test_getIpAddressFromFile(t *testing.T) {
-	tmpdir := ioutil.TempDir()
+	tmpdir, err := ioutil.TempDir("", "docker-machine-driver-hyperkit-tests")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(tmpdir)
 
 	dhcpFile := filepath.Join(tmpdir, "dhcp")
