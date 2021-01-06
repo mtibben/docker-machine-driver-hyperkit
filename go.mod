@@ -17,8 +17,7 @@ require (
 	github.com/mitchellh/go-ps v1.0.0
 	github.com/moby/hyperkit v0.0.0-20191030151855-97f091f9a653
 	github.com/moby/term v0.0.0-20201216013528-df9cb8a40635 // indirect
-	github.com/pkg/errors v0.9.1
-	github.com/stretchr/testify v1.4.0 // indirect
+	github.com/stretchr/testify v1.6.1 // indirect
 	github.com/zchee/go-vmnet v0.0.0-20161021174912-97ebf9174097
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad // indirect
 	golang.org/x/sys v0.0.0-20210105210732-16f7687f5001 // indirect

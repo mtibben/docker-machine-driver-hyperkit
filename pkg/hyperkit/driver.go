@@ -39,7 +39,6 @@ import (
 	"github.com/johanneswuerbach/nfsexports"
 	ps "github.com/mitchellh/go-ps"
 	hyperkit "github.com/moby/hyperkit/go"
-	"github.com/pkg/errors"
 	pkgdrivers "github.com/zazula/docker-machine-driver-hyperkit/pkg/drivers"
 )
 
@@ -178,12 +177,12 @@ func (d *Driver) Create() error {
 
 	// TODO: handle different disk types.
 	if err := pkgdrivers.MakeDiskImage(d.BaseDriver, d.Boot2DockerURL, d.DiskSize); err != nil {
-		return errors.Wrap(err, "making disk image")
+		return fmt.Errorf("making disk image: %w", err)
 	}
 
 	isoPath := d.ResolveStorePath(isoFilename)
 	if err := d.extractKernel(isoPath); err != nil {
-		return errors.Wrap(err, "extracting kernel")
+		return fmt.Errorf("extracting kernel: %w", err)
 	}
 
 	return d.Start()
@@ -284,7 +283,7 @@ func (d *Driver) Start() error {
 	}
 	h, err := hyperkit.New("", d.VpnKitSock, stateDir)
 	if err != nil {
-		return errors.Wrap(err, "new-ing Hyperkit")
+		return fmt.Errorf("new-ing Hyperkit: %w", err)
 	}
 
 	// TODO: handle the rest of our settings.
@@ -314,7 +313,7 @@ func (d *Driver) Start() error {
 	log.Debugf("Using UUID %s", h.UUID)
 	mac, err := GetMACAddressFromUUID(h.UUID)
 	if err != nil {
-		return errors.Wrap(err, "getting MAC address from UUID")
+		return fmt.Errorf("getting MAC address from UUID: %w", err)
 	}
 
 	// Need to strip 0's
@@ -323,19 +322,19 @@ func (d *Driver) Start() error {
 
 	disk, err := hyperkit.NewDisk(pkgdrivers.GetDiskPath(d.BaseDriver), d.DiskSize)
 	if err != nil {
-		return errors.Wrap(err, "error creating disk")
+		return fmt.Errorf("error creating disk: %w", err)
 	}
 	h.Disks = []hyperkit.Disk{disk}
 
 	log.Debugf("Starting with cmdline: %s", d.Cmdline)
 	if _, err := h.Start(d.Cmdline); err != nil {
-		return errors.Wrapf(err, "starting with cmd line: %s", d.Cmdline)
+		return fmt.Errorf("starting with cmd line: %s: %w", d.Cmdline, err)
 	}
 
 	getIP := func() error {
 		st, err := d.GetState()
 		if err != nil {
-			return errors.Wrap(err, "get state")
+			return fmt.Errorf("get state: %w", err)
 		}
 		if st == state.Error || st == state.Stopped {
 			return fmt.Errorf("hyperkit crashed! command line:\n  hyperkit %s", d.Cmdline)
@@ -403,23 +402,23 @@ func (d *Driver) recoverFromUncleanShutdown() error {
 			log.Debugf("clean start, hyperkit pid file doesn't exist: %s", pidFile)
 			return nil
 		}
-		return errors.Wrap(err, "stat")
+		return fmt.Errorf("stat: %w", err)
 	}
 
 	log.Warnf("hyperkit pid file still exists: %s", pidFile)
 	bs, err := ioutil.ReadFile(pidFile)
 	if err != nil {
-		return errors.Wrapf(err, "reading pidfile %s", pidFile)
+		return fmt.Errorf("reading pidfile %s: %w", pidFile, err)
 	}
 	content := strings.TrimSpace(string(bs))
 	pid, err := strconv.Atoi(content)
 	if err != nil {
-		return errors.Wrapf(err, "parsing pidfile %s", pidFile)
+		return fmt.Errorf("parsing pidfile %s: %w", pidFile, err)
 	}
 
 	st, err := pidState(pid)
 	if err != nil {
-		return errors.Wrap(err, "pidState")
+		return fmt.Errorf("pidState: %w", err)
 	}
 
 	log.Debugf("pid %d is in state %q", pid, st)
@@ -428,7 +427,7 @@ func (d *Driver) recoverFromUncleanShutdown() error {
 	}
 	log.Debugf("Removing stale pid file %s...", pidFile)
 	if err := os.Remove(pidFile); err != nil {
-		return errors.Wrap(err, fmt.Sprintf("removing pidFile %s", pidFile))
+		return fmt.Errorf("removing pidFile %s: %w", pidFile, err)
 	}
 	return nil
 }
@@ -441,7 +440,7 @@ func (d *Driver) Stop() error {
 	d.cleanupNfsExports()
 	err := d.sendSignal(syscall.SIGTERM)
 	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("hyperkit sigterm failed"))
+		return fmt.Errorf("hyperkit sigterm failed: %w", err)
 	}
 
 	// wait 5s for graceful shutdown
@@ -450,7 +449,7 @@ func (d *Driver) Stop() error {
 		time.Sleep(time.Second * 1)
 		s, err := d.GetState()
 		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("hyperkit waiting graceful shutdown failed"))
+			return fmt.Errorf("hyperkit waiting graceful shutdown failed: %w", err)
 		}
 		if s == state.Stopped {
 			return nil
@@ -468,17 +467,17 @@ func (d *Driver) extractKernel(isoPath string) error {
 	}
 
 	if files.KernelPath == "" {
-		return errors.Wrapf(err, "failed to extract kernel boot image from iso")
+		return fmt.Errorf("failed to extract kernel boot image from iso: %w", err)
 	}
 	d.BootKernel = files.KernelPath
 
 	if files.InitrdPath == "" {
-		return errors.Wrapf(err, "failed to extract initial ram disk from iso")
+		return fmt.Errorf("failed to extract initial ram disk from iso: %w", err)
 	}
 	d.BootInitrd = files.InitrdPath
 
 	if files.IsoLinuxCfgPath == "" {
-		return errors.Wrapf(err, "failed to extract isolinux config")
+		return fmt.Errorf("failed to extract isolinux config: %w", err)
 	}
 
 	return nil
