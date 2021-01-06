@@ -21,12 +21,10 @@ package hyperkit
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/docker/machine/libmachine/mcnflag"
 	"io/ioutil"
 	golog "log"
 	"os"
 	"os/user"
-//        "os/exec"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -36,6 +34,7 @@ import (
 
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/docker/machine/libmachine/log"
+	"github.com/docker/machine/libmachine/mcnflag"
 	"github.com/docker/machine/libmachine/state"
 	"github.com/google/uuid"
 	"github.com/johanneswuerbach/nfsexports"
@@ -65,8 +64,8 @@ const (
 type Driver struct {
 	*drivers.BaseDriver
 	*pkgdrivers.CommonDriver
-	BootInitrd 	   string
-	BootKernel 	   string
+	BootInitrd     string
+	BootKernel     string
 	Boot2DockerURL string
 	DiskSize       int
 	CPU            int
@@ -85,7 +84,7 @@ func NewDriver(machineName, storePath string) *Driver {
 	return &Driver{
 		// Don't init BaseDriver values here. They are overwritten by API .SetConfigRaw() call.
 		CommonDriver: &pkgdrivers.CommonDriver{},
-		DiskSize: defaultDiskSize,
+		DiskSize:     defaultDiskSize,
 	}
 }
 
@@ -117,24 +116,24 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "Memory size for host in MB.",
 			Value:  defaultMemory,
 		},
-                mcnflag.StringSliceFlag{
-                        EnvVar: "HYPERKIT_NFS_SHARES",
-                        Name:   "hyperkit-nfs-shares",
-                        Usage:  "NFS directories to share in format src:dst where 'src' is relative to the machine/machines/<name> folder and 'dst' is relative to the directory set in hyperkit-nfs-root.",
-                        Value:  nil,
-                },
-                mcnflag.StringFlag{
-                        EnvVar: "HYPERKIT_NFS_ROOT",
-                        Name:   "hyperkit-nfs-root",
-                        Usage:  "VM Host root directory to locate NFS Shares",
-                        Value:  defaultNFSRoot,
-                },
-                mcnflag.StringFlag{
-                        EnvVar: "HYPERKIT_NFS_FLAGS",
-                        Name:   "hyperkit-nfs-flags",
-                        Usage:  "additional flags for NFS",
-                        Value:  defaultNFSFlags,
-                },
+		mcnflag.StringSliceFlag{
+			EnvVar: "HYPERKIT_NFS_SHARES",
+			Name:   "hyperkit-nfs-shares",
+			Usage:  "NFS directories to share in format src:dst where 'src' is relative to the machine/machines/<name> folder and 'dst' is relative to the directory set in hyperkit-nfs-root.",
+			Value:  nil,
+		},
+		mcnflag.StringFlag{
+			EnvVar: "HYPERKIT_NFS_ROOT",
+			Name:   "hyperkit-nfs-root",
+			Usage:  "VM Host root directory to locate NFS Shares",
+			Value:  defaultNFSRoot,
+		},
+		mcnflag.StringFlag{
+			EnvVar: "HYPERKIT_NFS_FLAGS",
+			Name:   "hyperkit-nfs-flags",
+			Usage:  "additional flags for NFS",
+			Value:  defaultNFSFlags,
+		},
 	}
 }
 
@@ -144,9 +143,9 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.CPU = flags.Int("hyperkit-cpu-count")
 	d.DiskSize = int(flags.Int("hyperkit-disk-size"))
 	d.Memory = flags.Int("hyperkit-memory-size")
-        d.NFSFlags = flags.String("hyperkit-nfs-flags") 
-        d.NFSShares = flags.StringSlice("hyperkit-nfs-shares")
-        d.NFSSharesRoot = flags.String("hyperkit-nfs-root")
+	d.NFSFlags = flags.String("hyperkit-nfs-flags")
+	d.NFSShares = flags.StringSlice("hyperkit-nfs-shares")
+	d.NFSSharesRoot = flags.String("hyperkit-nfs-root")
 
 	return nil
 }
@@ -303,7 +302,7 @@ func (d *Driver) Start() error {
 	}
 	h.UUID = d.UUID
 	if h.UUID == "" {
-		h.UUID = uuid.NewSHA1( uuid.Nil, []byte(d.GetMachineName())).String()
+		h.UUID = uuid.NewSHA1(uuid.Nil, []byte(d.GetMachineName())).String()
 	}
 	// This should stream logs from hyperkit, but doesn't seem to work.
 	logger := golog.New(os.Stderr, "hyperkit", golog.LstdFlags)
@@ -472,7 +471,7 @@ func (d *Driver) extractKernel(isoPath string) error {
 		return err
 	}
 
-	if files.KernelPath == ""  {
+	if files.KernelPath == "" {
 		return errors.Wrapf(err, "failed to extract kernel boot image from iso")
 	}
 	d.BootKernel = files.KernelPath
@@ -528,16 +527,16 @@ func (d *Driver) setupNFSShare() error {
 
 	for _, share := range d.NFSShares {
 		a := strings.Split(share, ":")
-                share = a[0]
-                _share := share
-                _mnt_sub_path := _share
-                if (len(a) > 1) {
-                        _mnt_sub_path = a[1]
-                }
+		share = a[0]
+		_share := share
+		_mnt_sub_path := _share
+		if len(a) > 1 {
+			_mnt_sub_path = a[1]
+		}
 		if !path.IsAbs(share) {
 			share = d.ResolveStorePath(share)
-            		// rz: create path if it doesn't exist in the store...
-            		_ = os.MkdirAll(share, os.ModeDir | 0777)
+			// rz: create path if it doesn't exist in the store...
+			_ = os.MkdirAll(share, os.ModeDir|0777)
 			// rz: we are suid root but NFS users will be mapped to the current user, so...
 			uid, _ := strconv.Atoi(user.Uid)
 			gid, _ := strconv.Atoi(user.Gid)

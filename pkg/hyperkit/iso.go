@@ -29,12 +29,12 @@ import (
 var kernelRegexp = regexp.MustCompile(`(vmlinu[xz]|bzImage)[\d]*`)
 
 type ISOBootFiles struct {
-	InitrdPath string
-	KernelPath string
+	InitrdPath      string
+	KernelPath      string
 	IsoLinuxCfgPath string
 }
 
-func ISOExtractBootFiles (isoPath, destDirPath string) (ISOBootFiles, error) {
+func ISOExtractBootFiles(isoPath, destDirPath string) (ISOBootFiles, error) {
 	bootFiles := ISOBootFiles{}
 	iso, err := os.Open(isoPath)
 	if err != nil {
@@ -70,7 +70,7 @@ func ISOExtractBootFiles (isoPath, destDirPath string) (ISOBootFiles, error) {
 			continue
 		}
 
-		err = func () error {
+		err = func() error {
 			dst, err := os.Create(destPath)
 			if err != nil {
 				return err
@@ -79,7 +79,7 @@ func ISOExtractBootFiles (isoPath, destDirPath string) (ISOBootFiles, error) {
 
 			_, err = io.Copy(dst, f.Sys().(io.Reader))
 			return err
-		} ();
+		}()
 
 		if err != nil {
 			return bootFiles, err
