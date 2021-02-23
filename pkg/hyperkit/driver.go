@@ -201,6 +201,11 @@ func (d *Driver) GetSSHHostname() (string, error) {
 // GetURL returns a Docker compatible host URL for connecting to this host
 // e.g. tcp://1.2.3.4:2376
 func (d *Driver) GetURL() (string, error) {
+	s, err := d.GetState()
+	if s != state.Running {
+		return "", err
+	}
+
 	ip, err := d.GetIP()
 	if err != nil {
 		return "", err
