@@ -39,7 +39,7 @@ import (
 	"github.com/johanneswuerbach/nfsexports"
 	ps "github.com/mitchellh/go-ps"
 	hyperkit "github.com/moby/hyperkit/go"
-	pkgdrivers "github.com/zazula/docker-machine-driver-hyperkit/pkg/drivers"
+	pkgdrivers "github.com/mtibben/docker-machine-driver-hyperkit/pkg/drivers"
 )
 
 const (

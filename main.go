@@ -23,13 +23,14 @@ import (
 	"os"
 
 	"github.com/docker/machine/libmachine/drivers/plugin"
-	"github.com/zazula/docker-machine-driver-hyperkit/pkg/hyperkit"
+	"github.com/mtibben/docker-machine-driver-hyperkit/pkg/hyperkit"
 )
+
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println("version:", hyperkit.GetVersion())
-		fmt.Println("commit:", hyperkit.GetGitCommitID())
+		fmt.Println(version)
 		return
 	}
 

@@ -1,4 +1,4 @@
-module github.com/zazula/docker-machine-driver-hyperkit
+module github.com/mtibben/docker-machine-driver-hyperkit
 
 go 1.15
 

@@ -1,7 +1,9 @@
 .PHONY: build clean install
+VERSION=$(shell git describe --tags --candidates=1 --dirty)
+BUILD_FLAGS=-installsuffix "static" -ldflags="-X main.version=$(VERSION)"
 
 docker-machine-driver-hyperkit:
-	go build -installsuffix "static" -o docker-machine-driver-hyperkit
+	go build $(BUILD_FLAGS) -o docker-machine-driver-hyperkit
 
 build: docker-machine-driver-hyperkit
 
